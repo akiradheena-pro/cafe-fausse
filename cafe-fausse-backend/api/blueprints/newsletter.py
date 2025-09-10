@@ -23,4 +23,4 @@ def subscribe():
         db.session.add(cust)
 
     db.session.commit()
-    return jsonify(success=True)
+    return jsonify(message="Email added to newsletter"), 200
