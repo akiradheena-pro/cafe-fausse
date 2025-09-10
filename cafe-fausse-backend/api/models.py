@@ -1,6 +1,6 @@
 
 from datetime import datetime
-from sqlalchemy import UniqueConstraint, func
+from sqlalchemy import UniqueConstraint, func, CheckContraint
 from .extensions import db
 
 class Customer(db.Model):
@@ -27,4 +27,5 @@ class Reservation(db.Model):
 
     __table_args__ = (
         UniqueConstraint("time_slot", "table_number", name="uq_reservation_slot_table"),
+        CheckContraint("guest_count > 0", name="ck_guest_count_positive"),
     )
