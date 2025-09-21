@@ -1,6 +1,6 @@
 from flask import Flask, jsonify
 from .extensions import db
-from flask_migrate import Migrate
+from flask_migrate import Migrate   # ✅ import this
 from .config import Config
 from .blueprints.reservations import bp as reservations_bp
 from .blueprints.newsletter import bp as newsletter_bp
@@ -10,7 +10,7 @@ def create_app():
     app.config.from_object(Config)
 
     db.init_app(app)
-    Migrate(app, db)  # ✅ enable flask db commands
+    Migrate(app, db)   # ✅ enable flask db commands
 
     with app.app_context():
         from . import models  # noqa: F401
