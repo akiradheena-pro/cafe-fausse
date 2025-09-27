@@ -14,7 +14,7 @@ def subscribe():
     if not email or "@" not in email:
         return jerror(422, "BAD_EMAIL", "Invalid email format.")
 
-    name = (payload.get("name") or "Subscriber").strip()
+    name = (payload.get("name") or "").strip()
     phone = (payload.get("phone") or "").strip()
 
     t = Customer.__table__
@@ -28,8 +28,8 @@ def subscribe():
 
     update_set = {
         t.c.newsletter_opt_in: sa.true(),
-        t.c.name: sa.case([(ins.excluded.name == '', t.c.name)], else_=ins.excluded.name),
-        t.c.phone: sa.case([(ins.excluded.phone == '', t.c.phone)], else_=ins.excluded.phone),
+        t.c.name: sa.func.coalesce(sa.func.nullif(ins.excluded.name, ""), t.c.name),
+        t.c.phone: sa.func.coalesce(sa.func.nullif(ins.excluded.phone, ""), t.c.phone),
     }
 
     stmt = ins.on_conflict_do_update(
@@ -37,7 +37,7 @@ def subscribe():
         set_=update_set,
     ).returning(t.c.id)
 
-    cid = db.session.execute(stmt).scalar_one()
+    customer_id = db.session.execute(stmt).scalar_one()
     db.session.commit()
 
-    return jsonify(message="Email added to newsletter", customerId=cid), 200
+    return jsonify(message="Email added to newsletter", customerId=customer_id), 200
