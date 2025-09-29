@@ -77,6 +77,7 @@ def availability():
         available=TOTAL_TABLES - int(booked),
         slot=_api_iso_z(ts_rounded),
     )
+
 @bp.post("")
 def create_reservation():
     ip = _client_ip()
@@ -114,8 +115,9 @@ def create_reservation():
         db.session.add(customer)
         db.session.flush()
 
+    # FIX: Use ts_db (naive) for querying — matches SQLite storage
     booked = {t for (t,) in db.session.execute(
-        select(Reservation.table_number).where(Reservation.time_slot == ts)
+        select(Reservation.table_number).where(Reservation.time_slot == ts_db)
     ).all()}
     remaining = [t for t in range(1, TOTAL_TABLES + 1) if t not in booked]
     if not remaining:
@@ -123,7 +125,8 @@ def create_reservation():
 
     import random
     table = random.choice(remaining)
-    res = Reservation(customer_id=customer.id, time_slot=ts, table_number=table)
+    # FIX: Store ts_db (naive) in the database
+    res = Reservation(customer_id=customer.id, time_slot=ts_db, table_number=table)
     db.session.add(res)
 
     try:
@@ -132,7 +135,7 @@ def create_reservation():
         db.session.rollback()
         return jerror(409, "RACE_LOST", "Just booked out. Pick another time.")
 
-    return jsonify(reservationId=res.id, tableNumber=table, slot=ts.isoformat()), 201
+    return jsonify(reservationId=res.id, tableNumber=table, slot=_api_iso_z(ts_rounded)), 201
 
 @bp.get("")
 def list_reservations():
@@ -181,6 +184,5 @@ def list_reservations():
                 "phone": customer.phone,
             },
         })
-
 
     return jsonify(page=page, pageSize=page_size, total=total, reservations=data)
