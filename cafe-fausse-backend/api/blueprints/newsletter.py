@@ -1,39 +1,48 @@
 from flask import Blueprint, request, jsonify
+from pydantic import ValidationError
 from ..extensions import db
 from ..models import Customer
 from ..http import jerror
+from ..schemas import SubscribeRequest  
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from pydantic import ValidationError
+
 
 bp = Blueprint("newsletter", __name__)
 
 @bp.post("")
 def subscribe():
-    payload = request.get_json(silent=True) or {}
-    email = (payload.get("email") or "").strip().lower()
-    if not email or "@" not in email:
-        return jerror(422, "BAD_EMAIL", "Invalid email format.")
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jerror(400, "INVALID_PAYLOAD", "Missing or invalid JSON payload.")
 
-    name = (payload.get("name") or "").strip()
-    phone = (payload.get("phone") or "").strip()
+    try:
+        data = SubscribeRequest.model_validate(payload)
+    except ValidationError as e:
+        return jerror(422, "VALIDATION_ERROR", "Invalid input.", details=e.errors())
 
-    # Try to find existing customer
-    customer = Customer.query.filter_by(email=email).first()
-    if customer:
-        # Update opt-in and optional fields if provided
-        customer.newsletter_opt_in = True
-        if name:
-            customer.name = name
-        if phone:
-            customer.phone = phone
-    else:
-        # Create new customer
-        customer = Customer(
-            name=name or "Subscriber",
-            email=email,
-            phone=phone,
-            newsletter_opt_in=True
-        )
-        db.session.add(customer)
+    t = Customer.__table__
 
+    ins = pg_insert(t).values(
+        name=data.name,
+        email=data.email.lower(), 
+        phone=data.phone or "",
+        newsletter_opt_in=True,
+    )
+
+    update_set = {
+        t.c.newsletter_opt_in: sa.true(),
+        t.c.name: sa.func.coalesce(sa.func.nullif(ins.excluded.name, ""), t.c.name),
+        t.c.phone: sa.func.coalesce(sa.func.nullif(ins.excluded.phone, ""), t.c.phone),
+    }
+
+    stmt = ins.on_conflict_do_update(
+        index_elements=[t.c.email],
+        set_=update_set,
+    ).returning(t.c.id)
+
+    customer_id = db.session.execute(stmt).scalar_one()
     db.session.commit()
 
-    return jsonify(message="Email added to newsletter", customerId=customer.id), 200
+    return jsonify(message="Email added to newsletter", customerId=customer_id), 200

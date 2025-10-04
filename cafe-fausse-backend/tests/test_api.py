@@ -26,7 +26,7 @@ def _iso_utc_in_future(minutes: int = 120) -> str:
 
 
 def _unique_email(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:10]}@example.com"
+    return f"{prefix}_{uuid.uuid4().hex[:10]}@gmail.com"
 
 
 def test_health_ok():
@@ -39,13 +39,14 @@ def test_health_ok():
 def test_newsletter_invalid_email_422():
     r = requests.post(
         f"{BASE_URL}/api/newsletter",
-        json={"email": "not-an-email"},
+        json={"email": "not-an-email", "name": "Test"},
         timeout=10,
     )
     assert r.status_code == 422
     body = r.json()
-    assert body.get("code") == "BAD_EMAIL"
-
+    assert body.get("code") == "VALIDATION_ERROR"
+    assert "details" in body
+    assert body["details"][0]["loc"][0] == "email"
 
 def test_newsletter_subscribe_200_returns_customer_id():
     email = _unique_email("newsletter")

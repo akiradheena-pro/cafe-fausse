@@ -6,11 +6,12 @@ from ..extensions import db
 from ..models import Reservation, Customer
 from ..http import jerror
 from ..auth import check_admin
-from ..utils.time import parse_iso, round_to_slot, db_utc_naive, api_iso_z  # <-- Import from utils
+from ..utils.time import parse_iso, round_to_slot, db_utc_naive, api_iso_z 
+from ..schemas import CreateReservationRequest 
+from pydantic import ValidationError
 
 bp = Blueprint("reservations", __name__)
 
-# --- Dev-only rate limiter (very simple) ---
 _rate_state: dict[str, tuple[int, int]] = {}
 _RATE_WINDOW = 60
 _RATE_MAX = 12
@@ -25,13 +26,11 @@ def _allow(ip: str) -> bool:
     _rate_state[ip] = (count, win)
     return count <= _RATE_MAX
 
-# --- Time parsing functions REMOVED from here ---
 
 def _client_ip() -> str:
     fwd = request.headers.get("X-Forwarded-For")
     return (fwd.split(",")[0].strip() if fwd else request.remote_addr or "0.0.0.0")
 
-# --- Endpoints ---
 
 @bp.get("/availability")
 def availability():
@@ -66,39 +65,26 @@ def create_reservation():
     if not _allow(ip):
         return jerror(429, "RATE_LIMITED", "Too many requests. Try again shortly.")
 
-    payload = request.get_json(silent=True) or {}
-    required = ["time", "guests", "name", "email"]
-    missing = [k for k in required if not payload.get(k)]
-    if missing:
-        return jerror(400, "MISSING_FIELDS", f"Missing fields: {', '.join(missing)}")
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jerror(400, "INVALID_PAYLOAD", "Missing or invalid JSON payload.")
 
     try:
-        ts = parse_iso(payload["time"])
-    except Exception as e:
-        return jerror(422, "BAD_TIME", "Invalid time format, expected ISO 8601.", str(e))
+        data = CreateReservationRequest.model_validate(payload)
+    except ValidationError as e:
+        return jerror(422, "VALIDATION_ERROR", "Invalid input.", details=e.errors())
     
     slot_minutes = current_app.config["SLOT_MINUTES"]
-    ts_rounded = round_to_slot(ts, slot_minutes)
+    ts_rounded = round_to_slot(data.time, slot_minutes)
     ts_db = db_utc_naive(ts_rounded)
-
-    try:
-        guests = int(payload["guests"])
-        if guests < 1:
-            return jerror(422, "BAD_GUESTS", "guests must be >= 1.")
-    except Exception:
-        return jerror(422, "BAD_GUESTS", "guests must be an integer >= 1.")
-
-    name = str(payload["name"]).strip()
-    email = str(payload["email"]).strip().lower()
-    phone = str(payload.get("phone") or "").strip()
-
-    customer = Customer.query.filter_by(email=email).one_or_none()
+    
+    customer = Customer.query.filter_by(email=data.email.lower()).one_or_none()
     if not customer:
-        customer = Customer(name=name, email=email, phone=phone)
+        customer = Customer(name=data.name, email=data.email.lower(), phone=data.phone or "")
         db.session.add(customer)
         db.session.flush()
 
-    # --- New, efficient query to find an available table ---
+    # --- Efficient query to find an available table ---
     total_tables = current_app.config["TOTAL_TABLES"]
     find_table_query = text("""
         SELECT s.num
@@ -130,7 +116,6 @@ def create_reservation():
 
     return jsonify(reservationId=res.id, tableNumber=available_table, slot=api_iso_z(ts_rounded)), 201
 
-# ... (list_reservations endpoint remains the same)
 @bp.get("")
 def list_reservations():
     """
