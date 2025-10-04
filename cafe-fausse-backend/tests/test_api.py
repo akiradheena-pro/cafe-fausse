@@ -132,6 +132,32 @@ def test_admin_list_with_token_200_and_contains_new_reservation():
     data = r.json()
     assert "reservations" in data and isinstance(data["reservations"], list)
 
-    # Verify at least one entry matches the email we just booked
     emails = [row["customer"]["email"] for row in data["reservations"]]
     assert email in emails
+
+
+def test_admin_list_can_be_filtered_by_email():
+    unique_email = _unique_email("filter_test")
+    slot = _iso_utc_in_future(480) 
+    day = slot.split("T")[0]
+
+    create_res = requests.post(
+        f"{BASE_URL}/api/reservations",
+        json={"time": slot, "guests": 1, "name": "Filter Tester", "email": unique_email},
+        timeout=15,
+    )
+    assert create_res.status_code == 201
+
+    r_filtered = requests.get(
+        f"{BASE_URL}/api/reservations",
+        params={"date": day, "page": 1, "page_size": 100, "customer_email": unique_email},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        timeout=15,
+    )
+    assert r_filtered.status_code == 200
+    data_filtered = r_filtered.json()
+
+    assert len(data_filtered["reservations"]) > 0, "Filtered search should have returned the reservation we just created."
+    
+    for res in data_filtered["reservations"]:
+        assert res["customer"]["email"] == unique_email, "Found a reservation with an incorrect email in the filtered list."

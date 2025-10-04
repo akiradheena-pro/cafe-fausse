@@ -116,14 +116,16 @@ def create_reservation():
 
     return jsonify(reservationId=res.id, tableNumber=available_table, slot=api_iso_z(ts_rounded)), 201
 
+
 @bp.get("")
 def list_reservations():
     """
     Admin list for a single day with pagination.
-    Query: ?date=YYYY-MM-DD&page=1&page_size=20
+    Query: ?date=YYYY-MM-DD&page=1&page_size=20&customer_email=...
     """
     if not check_admin():
         return jerror(401, "UNAUTHORIZED", "Missing or invalid bearer token.")
+    
     date_str = request.args.get("date")
     if not date_str:
         return jerror(400, "MISSING_DATE", "Missing 'date' query parameter (YYYY-MM-DD).")
@@ -132,6 +134,7 @@ def list_reservations():
     except Exception as e:
         return jerror(422, "BAD_DATE", "Invalid date format. Use YYYY-MM-DD.", str(e))
 
+    customer_email = request.args.get("customer_email")
     page = max(int(request.args.get("page", 1)), 1)
     page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
 
@@ -140,21 +143,30 @@ def list_reservations():
     start_db = start_utc.replace(tzinfo=None)
     end_db = end_utc.replace(tzinfo=None)
 
+    # 1. Start with the base query
     q = (
         db.session.query(Reservation, Customer)
         .join(Customer, Reservation.customer_id == Customer.id)
         .filter(Reservation.time_slot >= start_db, Reservation.time_slot < end_db)
-        .order_by(Reservation.time_slot.asc(), Reservation.table_number.asc())
     )
 
+    if customer_email:
+        q = q.filter(Customer.email == customer_email)
+
     total = q.count()
-    rows = q.limit(page_size).offset((page - 1) * page_size).all()
+
+    rows = (
+        q.order_by(Reservation.time_slot.asc(), Reservation.table_number.asc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+        .all()
+    )
 
     data = []
     for reservation, customer in rows:
         data.append({
             "id": reservation.id,
-            "time": api_iso_z(reservation.time_slot), # Use consistent Z format
+            "time": api_iso_z(reservation.time_slot),
             "tableNumber": reservation.table_number,
             "customer": {
                 "id": customer.id,
@@ -163,6 +175,5 @@ def list_reservations():
                 "phone": customer.phone,
             },
         })
-
-
+        
     return jsonify(page=page, pageSize=page_size, total=total, reservations=data)

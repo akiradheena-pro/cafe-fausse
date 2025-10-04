@@ -1,267 +1,127 @@
-# Café Fausse — Backend (Flask + PostgreSQL)
+# Café Fausse — Backend API (Flask & PostgreSQL)
 
-Flask API for reservations, newsletter signups, and a basic admin listing view. Runs locally via Docker Compose with a one-command bootstrap, and includes a black-box test suite that hits the live server.
+This repository contains the backend API for Café Fausse, a fictional fine-dining restaurant. The API is built with Flask and SQLAlchemy, powered by a PostgreSQL database, and is fully containerized with Docker for easy setup and deployment.
 
----
-
-## What changed (and why)
-
-- **Self-healing startup**: `start.sh` now bootstraps the schema if missing, installs deps for Alembic in a one-off container, runs migrations, then waits on health. This prevents “fresh DB” and dependency drift errors.
-- **Time handling**: store **UTC-naive** `time_slot` in Postgres; return ISO8601 with `Z` in API responses. Avoids tz/type errors and keeps the contract predictable.
-- **Newsletter stability**: atomic Postgres **UPSERT** on `email` with structured errors; only update `name/phone` if provided non-empty.
-- **Admin auth**: Bearer token checked via a resilient lookup (env → `.env` → `.env.example` → `dev-admin-token`).
-- **Tests**: pytest suite for health/newsletter/availability/create/admin-list; tests read the token from `.env`.
+It provides endpoints for making reservations, checking table availability, managing newsletter subscriptions, and a simple admin view for listing daily bookings.
 
 ---
 
-## Quick start
+## Features
+
+-   **Reservations:** Create and manage customer table reservations.
+-   **Availability Check:** Real-time endpoint to check available tables for a given time slot.
+-   **Newsletter:** Robust newsletter signup with atomic UPSERT logic to prevent duplicate entries.
+-   **Admin View:** Secure endpoint for administrators to list all reservations for a specific day.
+-   **Dockerized:** One-command startup using Docker Compose for the API and PostgreSQL database.
+-   **Database Migrations:** Schema managed by Alembic, ensuring a single source of truth.
+-   **Data Seeding:** Includes a CLI command to populate the database with realistic test data.
+-   **Validated & Tested:** API endpoints feature robust input validation with Pydantic and are covered by a Pytest suite.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+-   [Docker](https://www.docker.com/products/docker-desktop/) and Docker Compose
+-   A Unix-like shell (e.g., Git Bash on Windows, or any standard Linux/macOS terminal)
+
+### Installation & Startup
+
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    cd <repository-folder>/backend
+    ```
+
+2.  **Run the startup script:**
+    This script will handle everything: create a `.env` file, build the Docker images, start the database, run migrations, and launch the API server.
+    ```bash
+    chmod +x start.sh
+    ./start.sh
+    ```
+
+    Once complete, the API will be running and accessible.
+
+    -   **Health Check:** `http://localhost:8000/health`
+    -   **Base API URL:** `http://localhost:8000/api`
+
+---
+
+## Usage
+
+### Configuration
+
+Environment variables are managed in the `.env` file. A `.env.example` is provided as a template.
+
+-   `DATABASE_URL`: Connection string for the PostgreSQL database.
+-   `PORT`: The port on which the Flask API will run.
+-   `SLOT_MINUTES`: The duration of a reservation slot (e.g., 30 minutes).
+-   `TOTAL_TABLES`: The total number of tables available in the restaurant.
+-   `ADMIN_TOKEN`: A secret bearer token for accessing admin-only endpoints.
+
+### Populating the Database (Seeding)
+
+To fill the database with sample customers and reservations for development, run the following command:
 
 ```bash
-# 1) Ensure Docker Desktop is running
-# 2) From backend root:
-chmod +x start.sh
-./start.sh
-````
+docker compose exec api flask seed
+```
 
-This will:
+### Running Tests
 
-* ensure `.env` exists (copy from `.env.example` if missing),
-* start Postgres and wait until ready,
-* **bootstrap schema** (idempotent) and run Alembic migrations,
-* start the API and wait for `/health` → `{"status":"ok"}`.
+The project includes a black-box test suite using Pytest. To run the tests:
+
+1.  Ensure the application is running via `./start.sh`.
+2.  Install development dependencies:
+    ```bash
+    pip install -r requirements-dev.txt
+    ```
+3.  Run Pytest:
+    ```bash
+    pytest
+    ```
 
 ---
 
-## Configuration
+## API Endpoints
 
-Environment variables (see `.env.example`):
+A brief overview of the available endpoints. For full details, see the API reference or source code.
 
-```
-DATABASE_URL=postgresql+psycopg2://postgres:postgres@db:5432/cafe_fausse
-PORT=8000
-SLOT_MINUTES=30
-ADMIN_TOKEN=dev-admin-token
-```
+#### Health Check
 
-**Admin token resolution order (server-side):**
+-   `GET /health`
+    -   **Description:** Checks if the API is running and available.
+    -   **Success Response (200 OK):** `{"status": "ok"}`
 
-1. `ADMIN_TOKEN` from process env
-2. `.env` in backend root
-3. `.env.example` in backend root
-4. default to `dev-admin-token`
+#### Reservations
 
-Rebuild/refresh API after changing env:
+-   `GET /api/reservations/availability?time=<ISO_8601_STRING>`
+    -   **Description:** Checks how many tables are available for a given time slot.
+-   `POST /api/reservations`
+    -   **Description:** Creates a new reservation.
+-   `GET /api/reservations?date=<YYYY-MM-DD>`
+    -   **Description:** (Admin only) Lists all reservations for a given date. Supports pagination and filtering.
+    -   **Headers:** `Authorization: Bearer <your_admin_token>`
+    -   **Query Params:** `page`, `page_size`, `customer_email`.
 
-```bash
-docker compose up -d --build api
-```
+#### Newsletter
 
----
-
-## Data model
-
-* **customers**: `id, name, email (unique), phone, newsletter_opt_in, created_at`
-* **reservations**: `id, customer_id (fk), time_slot (UTC-naive), table_number, created_at`
-* **uniqueness**: `(time_slot, table_number)` prevents double-booking
+-   `POST /api/newsletter`
+    -   **Description:** Subscribes a user to the newsletter. If the email already exists, it updates their opt-in status.
 
 ---
 
-## API reference
+## Contributing
 
-Base URL: `http://localhost:8000`
+Contributions are welcome. Please follow these steps:
 
-### Health
+1.  Fork the repository.
+2.  Create a new branch (`git checkout -b feature/your-feature-name`).
+3.  Make your changes.
+4.  Ensure all tests pass (`pytest`).
+5.  Commit your changes (`git commit -m 'Add some feature'`).
+6.  Push to the branch (`git push origin feature/your-feature-name`).
+7.  Open a Pull Request.
 
-`GET /health` → `200`
 
-```json
-{"status":"ok"}
-```
-
-### Reservations — availability
-
-`GET /api/reservations/availability?time=ISO8601` → `200`
-
-* Rounds input to `SLOT_MINUTES`.
-* Returns `{ totalTables, booked, available, slot }` (`slot` is ISO `Z`).
-* Errors: `400 MISSING_TIME`, `422 BAD_TIME`.
-
-### Reservations — create
-
-`POST /api/reservations` → `201`
-
-Request:
-
-```json
-{
-  "time": "2025-09-10T19:00:00Z",
-  "guests": 2,
-  "name": "Alex",
-  "email": "alex@example.com",
-  "phone": "optional"
-}
-```
-
-Response:
-
-```json
-{
-  "reservationId": 42,
-  "tableNumber": 7,
-  "slot": "2025-09-10T19:00:00Z"
-}
-```
-
-Errors:
-`400 MISSING_FIELDS`, `422 BAD_TIME`, `422 BAD_GUESTS`,
-`409 FULLY_BOOKED` / `409 RACE_LOST`, `429 RATE_LIMITED` (dev-only)
-
-### Reservations — admin list (Bearer auth)
-
-`GET /api/reservations?date=YYYY-MM-DD&page=1&page_size=20` → `200`
-
-Header: `Authorization: Bearer <ADMIN_TOKEN>`
-
-Response:
-
-```json
-{
-  "page": 1,
-  "pageSize": 10,
-  "total": 3,
-  "reservations": [
-    {
-      "id": 42,
-      "time": "2025-09-10T19:00:00Z",
-      "tableNumber": 7,
-      "customer": {
-        "id": 1, "name": "Alex", "email": "alex@example.com", "phone": ""
-      }
-    }
-  ]
-}
-```
-
-Errors: `401 UNAUTHORIZED`, `400 MISSING_DATE`, `422 BAD_DATE`.
-
-### Newsletter — subscribe
-
-`POST /api/newsletter` → `200`
-
-Request:
-
-```json
-{"email":"alex@example.com","name":"Alex","phone":"optional"}
-```
-
-Success:
-
-```json
-{"message":"Email added to newsletter","customerId":1}
-```
-
-Errors:
-
-* `422 BAD_EMAIL` for invalid email
-* Atomic UPSERT on `email`: if existing, sets `newsletter_opt_in=true` and updates `name/phone` only when provided non-empty
-
----
-
-## Quick manual tests
-
-```bash
-BASE="http://localhost:8000"
-TOKEN="${ADMIN_TOKEN:-dev-admin-token}"
-DAY="$(date -u +%F)"
-SLOT="$(date -u -Iseconds | cut -c1-19)Z"
-
-curl -sS ${BASE}/health | jq .
-curl -sS "${BASE}/api/reservations/availability?time=${SLOT}" | jq .
-curl -sS -X POST "${BASE}/api/newsletter" -H "content-type: application/json" \
-  -d '{"email":"alex+'$(date +%s)'@example.com","name":"Alex"}' | jq .
-curl -sS -X POST "${BASE}/api/reservations" -H "content-type: application/json" \
-  -d "{\"time\":\"${SLOT}\",\"guests\":2,\"name\":\"Alex\",\"email\":\"alex+$(date +%s)@example.com\"}" | jq .
-curl -sS "${BASE}/api/reservations?date=${DAY}&page=1&page_size=10" \
-  -H "Authorization: Bearer ${TOKEN}" | jq .
-```
-
----
-
-## Test suite (black-box)
-
-Install dev deps and run:
-
-```bash
-python -m pip install -r requirements-dev.txt
-pytest -q
-```
-
-Notes:
-
-* Tests read `ADMIN_TOKEN` from environment; if unset, they load `.env` to stay in sync with the API.
-
----
-
-## Scripts & commands
-
-```bash
-./start.sh                              # start / rebuild / migrate / health
-docker compose exec api alembic upgrade head
-docker compose exec db psql -U postgres -d cafe_fausse
-```
-
----
-
-## Development tips
-
-* **DB enforces double-booking** via unique `(time_slot, table_number)`; your code races safely: one insert wins, the other gets `409`.
-* **Slot rounding** ensures “same time” aligns to the same bucket.
-* **Structured errors** (`code` + `message`) make front-end handling deterministic.
-* The dev **rate limiter** is intentionally simple; use a real limiter in production.
-
----
-
-## Roadmap & status (checklist)
-
-### Week 1 — Foundations
-
-* [x] App factory, models, migrations
-* [x] Docker Compose for Postgres + API
-* [x] Health, availability, create reservation
-* [x] Newsletter basic endpoint
-* [x] `start.sh` bootstrap
-* [ ] Seed script
-* [ ] Basic unit tests
-
-### Week 2 — Backend polish (current)
-
-* [x] Slot rounding (configurable)
-* [x] Consistent JSON error shape
-* [x] Admin list with pagination
-* [x] Dev-only rate limit on create
-* [x] Newsletter structured errors (`422 BAD_EMAIL`)
-* [x] Newsletter atomic UPSERT (no duplicate/race 500s)
-* [x] Datetime handling: UTC-naive in DB, ISO `Z` in API
-* [x] Robust migrations & schema bootstrap via `start.sh`
-* [x] E2E tests (pytest) + token sync via dotenv
-* [ ] Admin filters (email/table/slot)
-* [ ] Unit & integration tests for error branches
-
-### Week 3 — Frontend & UX
-
-* [ ] Wire forms to API with clear success/error UI
-* [ ] Responsive layout & a11y
-* [ ] Content pages (Menu/About/Gallery)
-
-### Week 4 — Hardening
-
-* [ ] Observability & logs
-* [ ] Backups/restore
-* [ ] Production-grade rate limiting
-* [ ] Security headers/CORS tightening
-
-### Week 5–6 — Delivery
-
-* [ ] CI pipeline (build → start.sh → pytest)
-* [ ] Deploy (Gunicorn + reverse proxy / managed)
-* [ ] Ops runbook & UAT checklist
