@@ -1,15 +1,14 @@
 from flask import Blueprint, request, jsonify, current_app
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
 from ..extensions import db
 from ..models import Reservation, Customer
 from ..http import jerror
 from ..auth import check_admin
-
+from ..utils.time import parse_iso, round_to_slot, db_utc_naive, api_iso_z  # <-- Import from utils
 
 bp = Blueprint("reservations", __name__)
-TOTAL_TABLES = 30
 
 # --- Dev-only rate limiter (very simple) ---
 _rate_state: dict[str, tuple[int, int]] = {}
@@ -26,27 +25,7 @@ def _allow(ip: str) -> bool:
     _rate_state[ip] = (count, win)
     return count <= _RATE_MAX
 
-# --- Time parsing + slot rounding ---
-def _parse_iso(s: str) -> datetime:
-    s = s.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    return datetime.fromisoformat(s)
-
-def _to_utc(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-
-def _round_to_slot(dt: datetime, minutes: int) -> datetime:
-    dt = _to_utc(dt).astimezone(timezone.utc)
-    total = dt.hour * 60 + dt.minute
-    floored = (total // minutes) * minutes
-    return dt.replace(hour=floored // 60, minute=floored % 60, second=0, microsecond=0)
-
-def _db_utc_naive(dt: datetime) -> datetime:
-    return _to_utc(dt).astimezone(timezone.utc).replace(tzinfo=None)
-
-def _api_iso_z(dt: datetime) -> str:
-    return _to_utc(dt).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+# --- Time parsing functions REMOVED from here ---
 
 def _client_ip() -> str:
     fwd = request.headers.get("X-Forwarded-For")
@@ -60,23 +39,27 @@ def availability():
     if not t:
         return jerror(400, "MISSING_TIME", "Missing 'time' query parameter.")
     try:
-        ts = _parse_iso(t)
+        ts = parse_iso(t)
     except Exception as e:
         return jerror(422, "BAD_TIME", "Invalid time format, expected ISO 8601.", str(e))
-    slot_minutes = int(current_app.config.get("SLOT_MINUTES", 30))
-    ts_rounded = _round_to_slot(ts, slot_minutes)
-    ts_db = _db_utc_naive(ts_rounded)
+    
+    slot_minutes = current_app.config["SLOT_MINUTES"]
+    ts_rounded = round_to_slot(ts, slot_minutes)
+    ts_db = db_utc_naive(ts_rounded)
 
     booked = db.session.execute(
         select(func.count()).select_from(Reservation).where(Reservation.time_slot == ts_db)
     ).scalar_one()
     
+    total_tables = current_app.config["TOTAL_TABLES"]
+    
     return jsonify(
-        totalTables=TOTAL_TABLES,
+        totalTables=total_tables,
         booked=int(booked),
-        available=TOTAL_TABLES - int(booked),
-        slot=_api_iso_z(ts_rounded),
+        available=total_tables - int(booked),
+        slot=api_iso_z(ts_rounded),
     )
+
 @bp.post("")
 def create_reservation():
     ip = _client_ip()
@@ -90,12 +73,13 @@ def create_reservation():
         return jerror(400, "MISSING_FIELDS", f"Missing fields: {', '.join(missing)}")
 
     try:
-        ts = _parse_iso(payload["time"])
+        ts = parse_iso(payload["time"])
     except Exception as e:
         return jerror(422, "BAD_TIME", "Invalid time format, expected ISO 8601.", str(e))
-    slot_minutes = int(current_app.config.get("SLOT_MINUTES", 30))
-    ts_rounded = _round_to_slot(ts, slot_minutes)
-    ts_db = _db_utc_naive(ts_rounded)
+    
+    slot_minutes = current_app.config["SLOT_MINUTES"]
+    ts_rounded = round_to_slot(ts, slot_minutes)
+    ts_db = db_utc_naive(ts_rounded)
 
     try:
         guests = int(payload["guests"])
@@ -114,16 +98,28 @@ def create_reservation():
         db.session.add(customer)
         db.session.flush()
 
-    booked = {t for (t,) in db.session.execute(
-        select(Reservation.table_number).where(Reservation.time_slot == ts)
-    ).all()}
-    remaining = [t for t in range(1, TOTAL_TABLES + 1) if t not in booked]
-    if not remaining:
+    # --- New, efficient query to find an available table ---
+    total_tables = current_app.config["TOTAL_TABLES"]
+    find_table_query = text("""
+        SELECT s.num
+        FROM generate_series(1, :total_tables) AS s(num)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM reservations r
+            WHERE r.time_slot = :time_slot AND r.table_number = s.num
+        )
+        ORDER BY random()
+        LIMIT 1
+    """)
+    
+    available_table = db.session.execute(
+        find_table_query,
+        {"total_tables": total_tables, "time_slot": ts_db}
+    ).scalar_one_or_none()
+
+    if available_table is None:
         return jerror(409, "FULLY_BOOKED", "Time slot fully booked.")
 
-    import random
-    table = random.choice(remaining)
-    res = Reservation(customer_id=customer.id, time_slot=ts, table_number=table)
+    res = Reservation(customer_id=customer.id, time_slot=ts_db, table_number=available_table)
     db.session.add(res)
 
     try:
@@ -132,8 +128,9 @@ def create_reservation():
         db.session.rollback()
         return jerror(409, "RACE_LOST", "Just booked out. Pick another time.")
 
-    return jsonify(reservationId=res.id, tableNumber=table, slot=ts.isoformat()), 201
+    return jsonify(reservationId=res.id, tableNumber=available_table, slot=api_iso_z(ts_rounded)), 201
 
+# ... (list_reservations endpoint remains the same)
 @bp.get("")
 def list_reservations():
     """
@@ -172,7 +169,7 @@ def list_reservations():
     for reservation, customer in rows:
         data.append({
             "id": reservation.id,
-            "time": reservation.time_slot.isoformat(),
+            "time": api_iso_z(reservation.time_slot), # Use consistent Z format
             "tableNumber": reservation.table_number,
             "customer": {
                 "id": customer.id,

@@ -1,4 +1,3 @@
-
 import os
 
 class Config:
@@ -6,3 +5,4 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///local.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SLOT_MINUTES = int(os.getenv("SLOT_MINUTES", "30"))
+    TOTAL_TABLES = int(os.getenv("TOTAL_TABLES", "30"))

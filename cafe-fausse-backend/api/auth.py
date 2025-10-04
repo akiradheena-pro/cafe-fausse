@@ -1,50 +1,38 @@
 import os
 from flask import request
-
-import os
-from flask import request
+from pathlib import Path
+from dotenv import dotenv_values
 
 def _get_admin_token() -> str:
-    # 1) Process environment
-    expected = (os.getenv("ADMIN_TOKEN") or "").strip()
-    if expected:
-        return expected
 
-    # 2) Backend .env (mounted or copied)
+    token = os.getenv("ADMIN_TOKEN")
+    if token and token.strip():
+        return token.strip()
+
     try:
-        from pathlib import Path
-        from dotenv import dotenv_values
-        root = Path(__file__).resolve().parents[1]  # /app/api -> /app
+        root = Path(__file__).resolve().parents[1]
         env_path = root / ".env"
         if env_path.exists():
-            maybe = (dotenv_values(str(env_path)).get("ADMIN_TOKEN") or "").strip()
-            if maybe:
-                return maybe
-        # 3) Fallback to .env.example
-        env_example = root / ".env.example"
-        if env_example.exists():
-            maybe = (dotenv_values(str(env_example)).get("ADMIN_TOKEN") or "").strip()
-            if maybe:
-                return maybe
+            env_vars = dotenv_values(str(env_path))
+            token = env_vars.get("ADMIN_TOKEN")
+            if token and token.strip():
+                return token.strip()
     except Exception:
         pass
 
-    # 4) Final default for dev
     return "dev-admin-token"
 
 def check_admin() -> bool:
-    expected = _get_admin_token()
-    auth = (request.headers.get("Authorization") or "").strip()
-    if not auth.startswith("Bearer "):
-        return False
-    return auth[7:] == expected
+    """
+    Checks the Authorization header for a valid admin bearer token.
+    """
+    expected_token = _get_admin_token()
+    if not expected_token:
+        return False 
 
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        return False
 
-def check_admin() -> bool:
-    expected = _get_admin_token()
-    if not expected:
-        return False
-    auth = request.headers.get("Authorization", "").strip()
-    if not auth.startswith("Bearer "):
-        return False
-    return auth[7:] == expected
+    provided_token = auth_header[7:].strip()
+    return provided_token == expected_token

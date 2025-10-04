@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+from flask_cors import CORS 
 from .extensions import db, migrate
 from .config import Config
 from .blueprints.reservations import bp as reservations_bp
@@ -8,11 +9,13 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
+    CORS(app) 
+
     db.init_app(app)
-    migrate.init_app(app, db)  # <-- use migrate from extensions
+    migrate.init_app(app, db)
 
     with app.app_context():
-        from . import models  # noqa: F401
+        from . import models 
 
     app.register_blueprint(reservations_bp, url_prefix="/api/reservations")
     app.register_blueprint(newsletter_bp, url_prefix="/api/newsletter")
